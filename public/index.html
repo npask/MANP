@@ -5,88 +5,202 @@
 <title>Proximity Voice 🎙️</title>
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <style>
-body { background:#111; color:white; font-family:sans-serif; text-align:center; }
-select, button { padding:10px; margin:10px; font-size:16px; }
+  body {
+    background: #111;
+    color: #fff;
+    font-family: 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  h2 {
+    margin-top: 20px;
+    color: #0ff;
+  }
+
+  #controls {
+    margin: 20px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  select, button {
+    padding: 10px 15px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    cursor: pointer;
+  }
+
+  button {
+    background: #0ff;
+    color: #111;
+    transition: 0.2s;
+  }
+  button:hover { background: #0aa; }
+
+  #nearby {
+    margin-top: 20px;
+    width: 80%;
+    max-width: 400px;
+    background: #222;
+    border-radius: 10px;
+    padding: 15px;
+    text-align: left;
+  }
+
+  .player {
+    display: flex;
+    justify-content: space-between;
+    margin: 5px 0;
+    padding: 5px 10px;
+    border-radius: 5px;
+    background: #333;
+    transition: 0.2s;
+  }
+  .player.near { background: #0a0; }
+
+  #notification {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: #ff3333;
+    padding: 10px 20px;
+    border-radius: 10px;
+    display: none;
+    color: white;
+    font-weight: bold;
+  }
 </style>
 </head>
 <body>
 
 <h2>🎧 Proximity Voice Chat</h2>
-<select id="user"></select><br>
-<button onclick="start()">Start Voice 🚀</button>
+
+<div id="controls">
+  <select id="user"></select>
+  <button onclick="start()">Start Voice 🚀</button>
+</div>
+
+<div id="nearby">
+  <h3>Spieler in der Nähe:</h3>
+  <div id="playersList">Lade Spieler...</div>
+</div>
+
+<div id="notification"></div>
 
 <script>
 const socket = io("http://localhost:3000");
 let localUserId;
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-let threshold = 0.02; // Lautstärke Threshold
+let threshold = 0.02;
 const MAX_DISTANCE = 50;
 let playersCache = {};
+const notificationEl = document.getElementById("notification");
 
 /* ====================== Ringbuffer Setup ====================== */
-const RINGBUFFER_SIZE = 44100*1; // 1 Sekunden
+const RINGBUFFER_SIZE = 44100*1;
 const ringBuffer = new Float32Array(RINGBUFFER_SIZE);
 let writeIndex = 0;
 let readIndex = 0;
 
-// ScriptProcessor für kontinuierliches Playback
 const playProc = audioCtx.createScriptProcessor(1024, 0, 1);
 playProc.onaudioprocess = e => {
   const output = e.outputBuffer.getChannelData(0);
   for(let i=0;i<output.length;i++){
     output[i] = ringBuffer[readIndex];
-    ringBuffer[readIndex] = 0; // optional: Clear nach Abspielen
+    ringBuffer[readIndex] = 0;
     readIndex = (readIndex + 1) % RINGBUFFER_SIZE;
   }
 };
 playProc.connect(audioCtx.destination);
 
+/* ====================== Notifications ====================== */
+function notify(msg) {
+  notificationEl.innerText = msg;
+  notificationEl.style.display = "block";
+  setTimeout(()=> notificationEl.style.display="none", 4000);
+}
+
 /* ====================== Load Players ====================== */
 async function loadPlayers() {
-  const res = await fetch("http://localhost:3000/players");
-  playersCache = await res.json();
+  try {
+    const res = await fetch("http://localhost:3000/players");
+    playersCache = await res.json();
 
-  const sel = document.getElementById("user");
-  const currentValue = sel.value;
-  sel.innerHTML = "";
+    const sel = document.getElementById("user");
+    const currentValue = sel.value;
+    sel.innerHTML = "";
+    for (const id in playersCache) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.innerText = playersCache[id].name;
+      sel.appendChild(opt);
+    }
+    if(playersCache[currentValue]) sel.value = currentValue;
+    else sel.value = Object.keys(playersCache)[0];
 
-  for (const id in playersCache) {
-    const opt = document.createElement("option");
-    opt.value = id;
-    opt.innerText = playersCache[id].name;
-    sel.appendChild(opt);
+    updateNearby();
+  } catch(e) {
+    notify("Fehler beim Laden der Spieler 😢");
   }
-
-  if(playersCache[currentValue]) sel.value = currentValue;
-  else sel.value = Object.keys(playersCache)[0];
 }
 loadPlayers();
 setInterval(loadPlayers, 2000);
+
+/* ====================== Update Nearby UI ====================== */
+function updateNearby() {
+  const me = playersCache[localUserId];
+  if(!me) return;
+
+  const listEl = document.getElementById("playersList");
+  listEl.innerHTML = "";
+
+  for(const id in playersCache) {
+    if(id === localUserId) continue;
+    const p = playersCache[id];
+    const dist = Math.sqrt(
+      (me.x-p.x)**2 + (me.y-p.y)**2 + (me.z-p.z)**2
+    );
+    const el = document.createElement("div");
+    el.className = "player";
+    if(dist < MAX_DISTANCE) el.classList.add("near");
+    el.innerHTML = `<span>${p.name}</span><span>${Math.round(dist)}m</span>`;
+    listEl.appendChild(el);
+  }
+}
 
 /* ====================== Start Voice ====================== */
 async function start() {
   localUserId = document.getElementById("user").value;
   socket.emit("join", localUserId);
 
-  // AudioContext starten (muss durch User Interaction)
   if(audioCtx.state === "suspended") await audioCtx.resume();
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
-  const source = audioCtx.createMediaStreamSource(stream);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    const source = audioCtx.createMediaStreamSource(stream);
 
-  const processor = audioCtx.createScriptProcessor(1024, 1, 1);
-  source.connect(processor);
-  processor.connect(audioCtx.destination); // optional: Monitoring
+    const processor = audioCtx.createScriptProcessor(1024, 1, 1);
+    source.connect(processor);
+    processor.connect(audioCtx.destination); 
 
-  processor.onaudioprocess = e => {
-    const input = e.inputBuffer.getChannelData(0);
-    let max = 0;
-    for(let i=0;i<input.length;i++) max = Math.max(max, Math.abs(input[i]));
-    if(max < threshold) return; // Threshold
-
-    // Float32 -> Array for socket
-    socket.emit("voice", { from: localUserId, audio: Array.from(input) });
-  };
+    processor.onaudioprocess = e => {
+      const input = e.inputBuffer.getChannelData(0);
+      let max = 0;
+      for(let i=0;i<input.length;i++) max = Math.max(max, Math.abs(input[i]));
+      if(max < threshold) return;
+      socket.emit("voice", { from: localUserId, audio: Array.from(input) });
+    };
+    notify("Voice gestartet 🎙️");
+  } catch(e) {
+    notify("Mikrofon konnte nicht gestartet werden 😢");
+  }
 }
 
 /* ====================== Receive Audio + Proximity ====================== */
@@ -104,7 +218,6 @@ socket.on("voice", data => {
   const vol = Math.max(0, 1 - dist/MAX_DISTANCE);
   if(vol <= 0) return;
 
-  // Samples in Ringbuffer schreiben
   for(let i=0;i<data.audio.length;i++){
     ringBuffer[writeIndex] = data.audio[i]*vol;
     writeIndex = (writeIndex + 1) % RINGBUFFER_SIZE;
