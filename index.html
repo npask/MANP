@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Proximity Voice 🎙️</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+body { background:#111; color:white; font-family:sans-serif; text-align:center; }
+select, button { padding:10px; margin:10px; font-size:16px; }
+</style>
+</head>
+<body>
+
+<h2>🎧 Proximity Voice Chat</h2>
+<select id="user"></select><br>
+<button onclick="start()">Start Voice 🚀</button>
+
+<script>
+const socket = io("http://localhost:3000");
+let localUserId;
+let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let threshold = 0.02; // Lautstärke Threshold
+const MAX_DISTANCE = 50;
+let playersCache = {};
+
+/* ====================== Ringbuffer Setup ====================== */
+const RINGBUFFER_SIZE = 44100*1; // 1 Sekunden
+const ringBuffer = new Float32Array(RINGBUFFER_SIZE);
+let writeIndex = 0;
+let readIndex = 0;
+
+// ScriptProcessor für kontinuierliches Playback
+const playProc = audioCtx.createScriptProcessor(1024, 0, 1);
+playProc.onaudioprocess = e => {
+  const output = e.outputBuffer.getChannelData(0);
+  for(let i=0;i<output.length;i++){
+    output[i] = ringBuffer[readIndex];
+    ringBuffer[readIndex] = 0; // optional: Clear nach Abspielen
+    readIndex = (readIndex + 1) % RINGBUFFER_SIZE;
+  }
+};
+playProc.connect(audioCtx.destination);
+
+/* ====================== Load Players ====================== */
+async function loadPlayers() {
+  const res = await fetch("http://localhost:3000/players");
+  playersCache = await res.json();
+
+  const sel = document.getElementById("user");
+  const currentValue = sel.value;
+  sel.innerHTML = "";
+
+  for (const id in playersCache) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.innerText = playersCache[id].name;
+    sel.appendChild(opt);
+  }
+
+  if(playersCache[currentValue]) sel.value = currentValue;
+  else sel.value = Object.keys(playersCache)[0];
+}
+loadPlayers();
+setInterval(loadPlayers, 2000);
+
+/* ====================== Start Voice ====================== */
+async function start() {
+  localUserId = document.getElementById("user").value;
+  socket.emit("join", localUserId);
+
+  // AudioContext starten (muss durch User Interaction)
+  if(audioCtx.state === "suspended") await audioCtx.resume();
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  const source = audioCtx.createMediaStreamSource(stream);
+
+  const processor = audioCtx.createScriptProcessor(1024, 1, 1);
+  source.connect(processor);
+  processor.connect(audioCtx.destination); // optional: Monitoring
+
+  processor.onaudioprocess = e => {
+    const input = e.inputBuffer.getChannelData(0);
+    let max = 0;
+    for(let i=0;i<input.length;i++) max = Math.max(max, Math.abs(input[i]));
+    if(max < threshold) return; // Threshold
+
+    // Float32 -> Array for socket
+    socket.emit("voice", { from: localUserId, audio: Array.from(input) });
+  };
+}
+
+/* ====================== Receive Audio + Proximity ====================== */
+socket.on("voice", data => {
+  if(data.from === localUserId) return;
+  if(!data.audio || data.audio.length === 0) return;
+
+  const me = playersCache[localUserId];
+  const other = playersCache[data.from];
+  if(!me || !other) return;
+
+  const dist = Math.sqrt(
+    (me.x-other.x)**2 + (me.y-other.y)**2 + (me.z-other.z)**2
+  );
+  const vol = Math.max(0, 1 - dist/MAX_DISTANCE);
+  if(vol <= 0) return;
+
+  // Samples in Ringbuffer schreiben
+  for(let i=0;i<data.audio.length;i++){
+    ringBuffer[writeIndex] = data.audio[i]*vol;
+    writeIndex = (writeIndex + 1) % RINGBUFFER_SIZE;
+  }
+});
+</script>
+
+</body>
+</html>
