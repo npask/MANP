@@ -95,7 +95,7 @@
 <div id="notification"></div>
 
 <script>
-const socket = io("http://localhost:3000");
+const socket = io();
 let localUserId;
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let threshold = 0.02;
@@ -130,7 +130,7 @@ function notify(msg) {
 /* ====================== Load Players ====================== */
 async function loadPlayers() {
   try {
-    const res = await fetch("http://localhost:3000/players");
+    const res = await fetch("/players");
     playersCache = await res.json();
 
     const sel = document.getElementById("user");
@@ -227,3 +227,4 @@ socket.on("voice", data => {
 
 </body>
 </html>
+
