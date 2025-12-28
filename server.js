@@ -22,6 +22,8 @@ app.post("/positions", (req, res) => {
 
 app.get("/players", (_, res) => res.json(players));
 
+app.use(express.static("public"));
+
 /* Voice */
 io.on("connection", socket => {
   console.log("Voice client 🎧", socket.id);
@@ -44,3 +46,4 @@ io.on("connection", socket => {
 server.listen(3000, () => {
   console.log("Server läuft auf 3000 🚀");
 });
+
